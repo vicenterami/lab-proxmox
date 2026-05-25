@@ -42,3 +42,53 @@ terraform.rc
 # Optional: ignore plan files saved before destroying Terraform configuration
 # Uncomment the line below if you want to ignore planout files.
 # planout
+
+# -----------------------------
+# Ansible
+# -----------------------------
+.ansible/
+*.retry
+ansible.log
+
+# Vault password files
+.vault_pass
+.vault_pass.txt
+vault_pass.txt
+
+# -----------------------------
+# SSH keys and crypto material
+# -----------------------------
+.ssh/
+**/.ssh/
+id_rsa
+id_rsa.pub
+id_ecdsa
+id_ecdsa.pub
+id_ed25519
+id_ed25519.pub
+*.pem
+*.key
+*.p12
+*.pfx
+known_hosts
+authorized_keys
+
+# -----------------------------
+# Generic secrets
+# -----------------------------
+.env
+.env.*
+*.secret
+*.secrets
+secrets.*
+*.kdbx
+
+# -----------------------------
+# Local/editor/system files
+# -----------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
