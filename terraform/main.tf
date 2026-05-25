@@ -13,15 +13,7 @@ resource "libvirt_volume" "vm_disk" {
   pool           = "default"
   base_volume_id = libvirt_volume.os_image.id
   format         = "qcow2"
-}
-
-resource "null_resource" "resize_volume" {
-  for_each = var.nodes
-
-  provisioner "local-exec" {
-    command = "sudo qemu-img resize ${libvirt_volume.vm_disk[each.key].id} ${var.diskSize}G"
-  }
-  depends_on = [libvirt_volume.vm_disk]
+  size           = var.diskSize * 1024 * 1024 * 1024
 }
 
 #--- CUSTOMIZE ISO IMAGE
@@ -37,6 +29,7 @@ data "template_file" "user_data" {
     ip1      = "${each.value.ip1}"
     ip2      = "${each.value.ip2}"
     gateway  = "${var.gateway}"
+    public_key = file("~/.ssh/id_ed25519.pub")
   }
 }
 
