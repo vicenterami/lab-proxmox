@@ -43,7 +43,9 @@ lab-proxmox/
 ├── terraform/
 │   ├── main.tf               # Aprovisionamiento de VMs Proxmox base (Nested KVM)
 │   ├── variables.tf
-│   └── cloud_init.cfg        # Pre-configuración de red y usuarios para Proxmox
+│   ├── terraform.tf
+│   └── config/
+│       └── cloud_init.cfg    # Pre-configuración de red y usuarios para Proxmox
 ├── ansible/
 │   ├── inventory.ini         # Inventario de los 3 proxnodes
 │   ├── 01_setup_cluster.yml  # Configura locales, SSH y une los nodos al clúster Proxmox
