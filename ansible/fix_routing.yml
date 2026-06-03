@@ -1,6 +1,5 @@
-# fix_routing.yml
 ---
-- name: Corregir routing y ip_forward en todos los nodos
+- name: Corregir routing SDN e ip_forward
   hosts: all
   tasks:
 
@@ -12,46 +11,40 @@
         sysctl_file: /etc/sysctl.d/99-proxmox-sdn.conf
         reload: yes
 
-- name: Corregir conflicto de rutas SDN en proxnode1
+- name: Eliminar ruta conflictiva de vmbr1 en proxnode1
   hosts: proxnode1
   tasks:
 
-    - name: Verificar si vmbr1 tiene IP conflictiva con SDN
-      command: ip addr show vmbr1
-      register: vmbr1_info
+    - name: Verificar si vmbr1 tiene IP conflictiva
+      shell: ip addr show vmbr1 2>/dev/null | grep '172.24.4'
+      register: vmbr1_conflict
       changed_when: false
       failed_when: false
 
-    - name: Mostrar configuración de vmbr1
-      debug:
-        var: vmbr1_info.stdout_lines
-
-    - name: Quitar IP de vmbr1 si conflicta con la red SDN
+    - name: Quitar IP conflictiva de vmbr1
       command: ip addr del 172.24.4.11/24 dev vmbr1
-      when: "'172.24.4.11' in vmbr1_info.stdout"
+      when: vmbr1_conflict.rc == 0
       failed_when: false
 
     - name: Eliminar ruta de vmbr1 hacia red SDN
-      command: ip route del 172.24.4.0/24 dev vmbr1
-      failed_when: false
-
-    - name: Limpiar configuración estática de vmbr1 en /etc/network/interfaces
-      blockinfile:
-        path: /etc/network/interfaces
-        marker: "# {mark} VMBR1 SDN CONFLICT FIX"
-        block: |
-          # vmbr1 sin IP — solo bridge físico para SDN externo si se necesita
-        state: present
-
-    - name: Recargar interfaces
-      command: ifreload -a
-      ignore_errors: true
-
-    - name: Verificar rutas finales
-      command: ip route show | grep 172.24.4
-      register: routes_final
+      shell: ip route del 172.24.4.0/24 dev vmbr1 2>/dev/null || true
       changed_when: false
 
-    - name: Mostrar rutas finales
+    - name: Hacer la eliminación permanente via post-up en interfaces
+      blockinfile:
+        path: /etc/network/interfaces
+        marker: "# {mark} FIX RUTA CONFLICTIVA vmbr1"
+        block: |
+          post-up ip route del 172.24.4.0/24 dev vmbr1 2>/dev/null || true
+        insertafter: "iface vmbr1 inet static"
+      failed_when: false
+
+    - name: Verificar rutas finales
+      shell: ip route show | grep 172.24.4
+      register: routes_final
+      changed_when: false
+      failed_when: false
+
+    - name: Mostrar rutas activas
       debug:
         var: routes_final.stdout_lines

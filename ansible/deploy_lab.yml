@@ -226,3 +226,33 @@
 
     - name: Recargar interfaces de red
       command: ifreload -a
+
+# ==========================================
+# STAGE 8: CORREGIR ROUTING SDN
+# ==========================================
+- name: Corregir ip_forward y rutas conflictivas
+  hosts: all
+  tasks:
+    - name: Activar ip_forward permanente
+      sysctl:
+        name: net.ipv4.ip_forward
+        value: '1'
+        state: present
+        sysctl_file: /etc/sysctl.d/99-proxmox-sdn.conf
+        reload: yes
+
+- name: Eliminar ruta conflictiva vmbr1 en proxnode1
+  hosts: proxnode1
+  tasks:
+    - name: Quitar ruta conflictiva de vmbr1 si existe
+      shell: ip route del 172.24.4.0/24 dev vmbr1 2>/dev/null || true
+      changed_when: false
+
+    - name: Hacer permanente via post-up
+      blockinfile:
+        path: /etc/network/interfaces
+        marker: "# {mark} FIX RUTA CONFLICTIVA vmbr1"
+        block: |
+          post-up ip route del 172.24.4.0/24 dev vmbr1 2>/dev/null || true
+        insertafter: "iface vmbr1 inet static"
+      failed_when: false
