@@ -1,3 +1,4 @@
+# deploy_lab.yml
 ---
 # ==========================================
 # STAGE 1: CONFIGURACIÓN BASE Y LOCALES
@@ -24,32 +25,39 @@
         - /etc/apt/sources.list.d/pve-enterprise.list
         - /etc/apt/sources.list.d/ceph.list
 
-    - name: Agregar repositorio PVE No-Subscription (Gratuito para Laboratorios)
+    - name: Agregar repositorio PVE No-Subscription
       apt_repository:
         repo: "deb http://download.proxmox.com/debian/pve bookworm pve-no-subscription"
         state: present
         filename: pve-no-subscription
 
-    - name: Asegurar paquete de locales e instalar pexpect para automatizar claves
+    - name: Instalar dependencias
       apt:
-        name: 
+        name:
           - locales
           - python3-pexpect
           - sshpass
+          - dnsmasq
         state: present
         update_cache: true
 
-    - name: Agregar e instalar locale correcto
+    - name: Deshabilitar dnsmasq global
+      systemd:
+        name: dnsmasq
+        enabled: false
+        state: stopped
+
+    - name: Habilitar locale en /etc/locale.gen
       lineinfile:
         path: /etc/locale.gen
         regexp: "^#?{{ desired_locale }}"
         line: "{{ desired_locale }} UTF-8"
         state: present
 
-    - name: Generar locales del sistema
+    - name: Generar locales
       command: locale-gen
 
-    - name: Establecer entorno de locale por defecto
+    - name: Establecer locale por defecto
       shell: "update-locale LANG={{ desired_locale }} LC_ALL={{ desired_locale }}"
 
 # ==========================================
@@ -58,40 +66,50 @@
 - name: Configurar Clúster Proxmox VE
   hosts: proxnode1
   tasks:
-    - name: Crear el clúster Proxmox en el nodo maestro
+    - name: Crear el clúster en el nodo maestro
       command: pvecm create proclus
       args:
         creates: /etc/pve/corosync.conf
 
-- name: Unir Nodos Secundarios al Clúster de forma Automática
+- name: Unir Nodos Secundarios al Clúster
   hosts: proxnode2:proxnode3
+  serial: 1                        # ← uno por uno para evitar race conditions
   tasks:
-    - name: Forzar aceptación de huellas SSH entre nodos y unión sin colgarse
+    - name: Unirse al clúster
       expect:
         command: pvecm add {{ hostvars['proxnode1']['ansible_host'] }}
         responses:
           "Are you sure you want to continue connecting": "yes"
           "(?i)password": "adminlogin"
-        timeout: 45
+        timeout: 60
       args:
         creates: /etc/pve/corosync.conf
       register: cluster_join
-      failed_when: 
+      failed_when:
         - cluster_join.failed
-        - "'already a cluster member' not in cluster_join.msg"
+        - "'already a cluster member' not in (cluster_join.stdout | default('') + cluster_join.msg | default(''))"
+
+    - name: Esperar a que pmxcfs sincronice en este nodo antes de continuar
+      wait_for:
+        path: /etc/pve/corosync.conf
+        state: present
+        timeout: 60
 
 # ==========================================
-# STAGE 3: DESPLIEGUE Y CONFIGURACIÓN DE CEPH
+# STAGE 3: INSTALACIÓN DE CEPH
 # ==========================================
-- name: Desplegar Almacenamiento Distribuido Ceph
+- name: Instalar Ceph en todos los nodos
   hosts: all
   tasks:
-    - name: Instalar paquetes de Ceph (Versión Reef)
+    - name: Instalar paquetes Ceph (Reef)
       shell: yes | pveceph install --repository no-subscription --version reef
       args:
         executable: /bin/bash
 
-- name: Inicializar Ceph en el Maestro
+# ==========================================
+# STAGE 4: INICIALIZAR CEPH EN EL MAESTRO
+# ==========================================
+- name: Inicializar Ceph en proxnode1
   hosts: proxnode1
   tasks:
     - name: Inicializar clúster Ceph
@@ -104,10 +122,27 @@
       args:
         creates: /var/lib/ceph/mon/ceph-proxnode1
 
-- name: Levantar Monitores y Managers en el resto de los nodos
+    - name: Pausa para que pmxcfs propague ceph.conf a los nodos secundarios
+      pause:
+        seconds: 30          # ← aumentado de 15 a 30
+
+# ==========================================
+# STAGE 5: MONITORES Y MANAGERS EN SECUNDARIOS
+# ==========================================
+- name: Monitores y Managers en todos los nodos
   hosts: all
   tasks:
-    - name: Crear Monitores Secundarios (Con reintentos por sincronización)
+
+    # LA CORRECCIÓN PRINCIPAL: esperar que /etc/pve/ceph.conf
+    # exista en cada nodo antes de intentar createmon
+    - name: Esperar propagación de ceph.conf via pmxcfs
+      wait_for:
+        path: /etc/pve/ceph.conf
+        state: present
+        timeout: 120
+      when: inventory_hostname != 'proxnode1'
+
+    - name: Crear Monitores Secundarios
       command: pveceph createmon --mon-address {{ ansible_host }}
       args:
         creates: /var/lib/ceph/mon/ceph-{{ inventory_hostname }}
@@ -122,24 +157,24 @@
       args:
         creates: /var/lib/ceph/mgr/ceph-{{ inventory_hostname }}
 
-    - name: Configurar disco /dev/vdb como Ceph OSD
+    - name: Configurar /dev/vdb como OSD
       command: pveceph createosd /dev/vdb
       ignore_errors: true
 
 # ==========================================
-# STAGE 4: POOLS DE ALMACENAMIENTO Y SDN
+# STAGE 6: POOLS Y SDN
 # ==========================================
-- name: Finalizar Configuración de Almacenamiento y Red SDN
+- name: Pools de almacenamiento y SDN
   hosts: proxnode1
   vars:
     ceph_pool_name: "vmstore"
   tasks:
-    - name: Verificar si el pool Ceph ya existe
+    - name: Verificar pools Ceph existentes
       command: ceph osd pool ls
       register: ceph_pools
       changed_when: false
 
-    - name: Crear Pool Ceph e integrar a Proxmox Storage
+    - name: Crear Pool Ceph
       command: pveceph pool create {{ ceph_pool_name }} --pg_autoscale_mode on --add_storages 1
       when: ceph_pool_name not in ceph_pools.stdout_lines
 
@@ -150,13 +185,44 @@
         - sdn_zone_res.failed
         - "'already defined' not in sdn_zone_res.stderr"
 
-    - name: Crear VNet virtual 'sdnbr1'
+    - name: Crear VNet 'sdnbr1'
       command: pvesh create /cluster/sdn/vnets --vnet sdnbr1 --zone vmlocal
       register: sdn_vnet_res
       failed_when:
         - sdn_vnet_res.failed
         - "'already exists' not in sdn_vnet_res.stderr and 'already defined' not in sdn_vnet_res.stderr"
 
-    - name: Aplicar cambios de la Red Definida por Software
+    - name: Crear subred DHCP para sdnbr1
+      command: >
+        pvesh create /cluster/sdn/vnets/sdnbr1/subnets
+        --subnet 172.24.4.0/24
+        --type subnet
+        --gateway 172.24.4.254
+        --dhcp-range start-address=172.24.4.10,end-address=172.24.4.100
+        --dhcp-dns-server 8.8.8.8
+      register: sdn_subnet_res
+      failed_when:
+        - sdn_subnet_res.failed
+        - "'already exists' not in sdn_subnet_res.stderr and 'already defined' not in sdn_subnet_res.stderr"
+
+    - name: Aplicar configuración SDN
       command: pvesh set /cluster/sdn
       ignore_errors: true
+
+# ==========================================
+# STAGE 7: ACTIVAR SDN EN TODOS LOS NODOS
+# ==========================================
+- name: Activar interfaces SDN en todos los nodos
+  hosts: all
+  tasks:
+    - name: Agregar directivas source para SDN en /etc/network/interfaces
+      blockinfile:
+        path: /etc/network/interfaces
+        marker: "# {mark} PROXMOX SDN"
+        block: |
+          source /etc/network/interfaces.d/*
+          source /etc/network/interfaces.d/sdn
+        state: present
+
+    - name: Recargar interfaces de red
+      command: ifreload -a

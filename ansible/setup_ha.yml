@@ -1,0 +1,30 @@
+# setup_ha.yml
+---
+- name: Configurar Alta Disponibilidad para VM Alpine
+  hosts: proxnode1
+  tasks:
+
+    - name: Verificar estado actual del clúster HA
+      command: ha-manager status
+      register: ha_status
+      changed_when: false
+
+    - name: Mostrar estado HA actual
+      debug:
+        var: ha_status.stdout_lines
+
+    - name: Agregar VM 9001 al grupo HA
+      command: ha-manager add vm:9001 --state started --max_restart 3 --max_relocate 2
+      register: ha_add
+      failed_when:
+        - ha_add.rc != 0
+        - "'already exists' not in ha_add.stderr"
+
+    - name: Verificar que HA quedó configurado
+      command: ha-manager status
+      register: ha_final
+      changed_when: false
+
+    - name: Mostrar estado final
+      debug:
+        var: ha_final.stdout_lines

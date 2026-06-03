@@ -1,25 +1,26 @@
-- name: Configurar locale es_ES.UTF-8 en nodos Proxmox
+# locale_es.yml
+---
+- name: Configurar locale es_ES.UTF-8
   hosts: all
   tasks:
-
-    - name: Asegurarse de que el locale es_ES.UTF-8 esté habilitado en /etc/locale.gen
+    - name: Habilitar es_ES.UTF-8 en locale.gen
       lineinfile:
         path: /etc/locale.gen
         regexp: '^#?es_ES.UTF-8 UTF-8'
         line: 'es_ES.UTF-8 UTF-8'
         state: present
 
-    - name: Generar los locales
+    - name: Generar locales
       command: locale-gen
 
-    - name: Establecer locale predeterminado a es_ES.UTF-8
+    - name: Establecer LANG
       lineinfile:
         path: /etc/default/locale
         regexp: '^LANG='
         line: 'LANG=es_ES.UTF-8'
         create: yes
 
-    - name: Establecer LC_ALL a es_ES.UTF-8
+    - name: Establecer LC_ALL
       lineinfile:
         path: /etc/default/locale
         regexp: '^LC_ALL='

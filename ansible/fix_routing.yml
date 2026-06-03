@@ -1,0 +1,57 @@
+# fix_routing.yml
+---
+- name: Corregir routing y ip_forward en todos los nodos
+  hosts: all
+  tasks:
+
+    - name: Activar ip_forward permanente
+      sysctl:
+        name: net.ipv4.ip_forward
+        value: '1'
+        state: present
+        sysctl_file: /etc/sysctl.d/99-proxmox-sdn.conf
+        reload: yes
+
+- name: Corregir conflicto de rutas SDN en proxnode1
+  hosts: proxnode1
+  tasks:
+
+    - name: Verificar si vmbr1 tiene IP conflictiva con SDN
+      command: ip addr show vmbr1
+      register: vmbr1_info
+      changed_when: false
+      failed_when: false
+
+    - name: Mostrar configuración de vmbr1
+      debug:
+        var: vmbr1_info.stdout_lines
+
+    - name: Quitar IP de vmbr1 si conflicta con la red SDN
+      command: ip addr del 172.24.4.11/24 dev vmbr1
+      when: "'172.24.4.11' in vmbr1_info.stdout"
+      failed_when: false
+
+    - name: Eliminar ruta de vmbr1 hacia red SDN
+      command: ip route del 172.24.4.0/24 dev vmbr1
+      failed_when: false
+
+    - name: Limpiar configuración estática de vmbr1 en /etc/network/interfaces
+      blockinfile:
+        path: /etc/network/interfaces
+        marker: "# {mark} VMBR1 SDN CONFLICT FIX"
+        block: |
+          # vmbr1 sin IP — solo bridge físico para SDN externo si se necesita
+        state: present
+
+    - name: Recargar interfaces
+      command: ifreload -a
+      ignore_errors: true
+
+    - name: Verificar rutas finales
+      command: ip route show | grep 172.24.4
+      register: routes_final
+      changed_when: false
+
+    - name: Mostrar rutas finales
+      debug:
+        var: routes_final.stdout_lines

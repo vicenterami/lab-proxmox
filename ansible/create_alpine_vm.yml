@@ -1,0 +1,123 @@
+# create_alpine_vm.yml
+---
+- name: Desplegar Alpine Linux Cloud-Init para pruebas de HA
+  hosts: proxnode1
+  vars:
+    vm_id: 9001
+    vm_name: "alpine321-cloud"
+    vm_memory: 512
+    vm_cores: 1
+    vm_storage: "vmstore"
+    vm_bridge: "sdnbr1"
+    vm_disk_size: "2G"          # ← mínimo para cloud-init
+    alpine_image: "nocloud_alpine-3.21.2-x86_64-bios-cloudinit-r0.qcow2"
+    alpine_url: "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/cloud/{{ alpine_image }}"
+    vm_password: "adminlogin"
+    ssh_pubkey: "{{ lookup('file', 'rootkey.pub') }}"
+
+  tasks:
+
+    # ── LIMPIAR VM ANTERIOR ────────────────────────────────────────
+    - name: Detener VM si está corriendo
+      command: qm stop {{ vm_id }}
+      failed_when: false
+      changed_when: false
+
+    - name: Quitar VM del HA antes de destruir
+      command: ha-manager remove vm:{{ vm_id }}
+      failed_when: false
+      changed_when: false
+
+    - name: Destruir VM anterior si existe
+      command: qm destroy {{ vm_id }} --purge
+      failed_when: false
+      changed_when: false
+
+    - name: Pausa para que Ceph libere los discos
+      pause:
+        seconds: 10
+
+    # ── IMAGEN ────────────────────────────────────────────────────
+    - name: Descargar imagen Alpine Cloud si no existe
+      get_url:
+        url: "{{ alpine_url }}"
+        dest: "/root/{{ alpine_image }}"
+        mode: '0644'
+
+    # ── CREAR VM ──────────────────────────────────────────────────
+    - name: Crear VM base Alpine
+      command: >
+        qm create {{ vm_id }}
+        --name {{ vm_name }}
+        --memory {{ vm_memory }}
+        --cores {{ vm_cores }}
+        --net0 virtio,bridge={{ vm_bridge }}
+        --serial0 socket
+        --vga serial0
+        --ostype l26
+
+    - name: Importar disco qcow2 al storage Ceph
+      command: >
+        qm importdisk {{ vm_id }} /root/{{ alpine_image }} {{ vm_storage }}
+
+    - name: Configurar controlador SCSI y disco principal
+      command: >
+        qm set {{ vm_id }}
+        --scsihw virtio-scsi-pci
+        --scsi0 {{ vm_storage }}:vm-{{ vm_id }}-disk-0
+
+    - name: Ampliar disco a {{ vm_disk_size }}
+      command: qm resize {{ vm_id }} scsi0 {{ vm_disk_size }}
+
+    - name: Configurar orden de arranque
+      command: qm set {{ vm_id }} --boot order=scsi0
+
+    - name: Agregar unidad Cloud-Init
+      command: qm set {{ vm_id }} --ide2 {{ vm_storage }}:cloudinit
+
+    # ── CLOUD-INIT ────────────────────────────────────────────────
+    - name: Configurar usuario root y contraseña
+      command: >
+        qm set {{ vm_id }}
+        --ciuser root
+        --cipassword {{ vm_password }}
+
+    - name: Configurar red DHCP
+      command: qm set {{ vm_id }} --ipconfig0 ip=dhcp
+
+    - name: Copiar clave SSH pública al nodo
+      copy:
+        content: "{{ ssh_pubkey }}\n"
+        dest: "/tmp/vm{{ vm_id }}_root.pub"
+        mode: '0644'
+
+    - name: Inyectar clave SSH pública
+      command: qm set {{ vm_id }} --sshkeys /tmp/vm{{ vm_id }}_root.pub
+
+    - name: Limpiar archivo temporal de clave
+      file:
+        path: "/tmp/vm{{ vm_id }}_root.pub"
+        state: absent
+
+    # ── INICIAR ───────────────────────────────────────────────────
+    - name: Iniciar VM Alpine
+      command: qm start {{ vm_id }}
+
+    - name: Esperar arranque completo (cloud-init necesita ~40s)
+      pause:
+        seconds: 45
+
+    # ── VERIFICAR RED ─────────────────────────────────────────────
+    - name: Verificar conectividad con la VM
+      command: ping -c 3 172.24.4.10
+      register: ping_result
+      ignore_errors: true
+
+    - name: Resultado de conectividad
+      debug:
+        msg: >
+          {% if ping_result.rc == 0 %}
+          ✅ VM responde en 172.24.4.10
+          {% else %}
+          ⚠️  VM no responde aún — espera 30s más y prueba manualmente
+          {% endif %}
