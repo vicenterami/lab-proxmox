@@ -256,3 +256,17 @@
           post-up ip route del 172.24.4.0/24 dev vmbr1 2>/dev/null || true
         insertafter: "iface vmbr1 inet static"
       failed_when: false
+
+    - name: Configurar NAT para salida a internet desde VMs
+      iptables:
+        table: nat
+        chain: POSTROUTING
+        source: 172.24.4.0/24
+        out_interface: vmbr0
+        jump: MASQUERADE
+        state: present
+
+    - name: Hacer NAT permanente
+      shell: iptables-save > /etc/iptables/rules.v4
+      args:
+        creates: /etc/iptables/rules.v4
