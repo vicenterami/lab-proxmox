@@ -6,7 +6,7 @@ Aprovisionado sobre KVM con Terraform y configurado con Ansible.
 
 ## Arquitectura
 
-\`\`\`
+```text
 ┌─────────────────────────────────────────────────┐
 │              Host Físico (Ubuntu/KVM)           │
 │                                                 │
@@ -19,7 +19,7 @@ Aprovisionado sobre KVM con Terraform y configurado con Ansible.
 │          192.168.122.0/24 (gestión)             │
 │          172.24.4.0/24   (SDN/VMs)              │
 └─────────────────────────────────────────────────┘
-\`\`\`
+```
 
 | Nodo      | IP             | Roles                        |
 |-----------|----------------|------------------------------|
@@ -36,7 +36,7 @@ Aprovisionado sobre KVM con Terraform y configurado con Ansible.
 
 ## Estructura
 
-\`\`\`
+```
 lab-proxmox/
 ├── terraform/
 │   ├── main.tf            # VMs KVM (nested virtualization)
@@ -51,11 +51,11 @@ lab-proxmox/
     ├── setup_ha.yml       # Alta Disponibilidad
     ├── fix_routing.yml    # ip_forward + NAT + rutas SDN
     └── locale_es.yml      # Locales opcionales
-\`\`\`
+```
 
 ## Despliegue
 
-\`\`\`bash
+```bash
 # 1. Aprovisionar VMs con Terraform
 cd terraform && terraform apply
 
@@ -68,11 +68,11 @@ ansible-playbook create_alpine_vm.yml
 
 # 4. Configurar HA
 ansible-playbook setup_ha.yml
-\`\`\`
+```
 
 ## Prueba de Alta Disponibilidad
 
-\`\`\`bash
+```bash
 # Terminal 1 — monitorear
 watch -n2 'ssh root@192.168.122.12 "ha-manager status"'
 
@@ -80,11 +80,11 @@ watch -n2 'ssh root@192.168.122.12 "ha-manager status"'
 ssh root@192.168.122.11 "shutdown -h now"
 
 # Resultado esperado: VM migra a proxnode2 o proxnode3 en ~60s
-\`\`\`
+```
 
 ## Acceso a las VMs
 
-\`\`\`bash
+```bash
 # Configurar ~/.ssh/config (ejecutar una vez)
 Host proxnode1
     HostName 192.168.122.11
@@ -101,4 +101,4 @@ Host 172.24.4.*
 
 # Conectar a la VM Alpine
 ssh root@172.24.4.10
-\`\`\`
+```
