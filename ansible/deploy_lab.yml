@@ -89,11 +89,15 @@
         - cluster_join.failed
         - "'already a cluster member' not in (cluster_join.stdout | default('') + cluster_join.msg | default(''))"
 
+    - name: Pausa post-join para que corosync estabilice
+      pause:
+        seconds: 20
+
     - name: Esperar a que pmxcfs sincronice en este nodo antes de continuar
       wait_for:
         path: /etc/pve/corosync.conf
         state: present
-        timeout: 60
+        timeout: 120       # ← de 60 a 120
 
 # ==========================================
 # STAGE 3: INSTALACIÓN DE CEPH
@@ -258,15 +262,13 @@
       failed_when: false
 
     - name: Configurar NAT para salida a internet desde VMs
-      iptables:
-        table: nat
-        chain: POSTROUTING
-        source: 172.24.4.0/24
-        out_interface: vmbr0
-        jump: MASQUERADE
-        state: present
+      shell: |
+        iptables -t nat -C POSTROUTING -s 172.24.4.0/24 -o vmbr0 -j MASQUERADE 2>/dev/null || \
+        iptables -t nat -A POSTROUTING -s 172.24.4.0/24 -o vmbr0 -j MASQUERADE
+      changed_when: false
 
     - name: Hacer NAT permanente
-      shell: iptables-save > /etc/iptables/rules.v4
-      args:
-        creates: /etc/iptables/rules.v4
+      shell: |
+        mkdir -p /etc/iptables
+        iptables-save > /etc/iptables/rules.v4
+      changed_when: false

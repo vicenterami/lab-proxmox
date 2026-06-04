@@ -6,23 +6,24 @@ Aprovisionado sobre KVM con Terraform y configurado con Ansible.
 
 ## Arquitectura
 
-```text
-┌─────────────────────────────────────────────────┐
-│              Host Físico (Ubuntu/KVM)           │
-│                                                 │
-│  proxnode1 (.11)  proxnode2 (.12)  proxnode3 (.13)│
-│  ┌───────────┐   ┌───────────┐   ┌───────────┐  │
-│  │ VM Alpine │──>│ (failover)│   │ (failover)│  │
-│  │ 172.24.4.10│  └───────────┘   └───────────┘  │
-│  │ Ceph OSD1 │   Ceph OSD2       Ceph OSD3      │
-│  └───────────┘                                  │
-│          192.168.122.0/24 (gestión)             │
-│          172.24.4.0/24   (SDN/VMs)              │
-└─────────────────────────────────────────────────┘
+```
+┌──────────────────────────────────────────────────────┐
+│                Host Físico (Ubuntu/KVM)              │
+│                                                      │
+│  proxnode1(.11)   proxnode2(.12)   proxnode3(.13)     │
+│  ┌──────────┐     ┌──────────┐     ┌──────────┐      │
+│  │VM Alpine │────>│(failover)│     │(failover)│  HA  │
+│  │172.24.4.10     └──────────┘     └──────────┘      │
+│  │Ceph OSD1 │     Ceph OSD2        Ceph OSD3         │
+│  │MON+MGR   │     MON+MGR          MON+MGR           │
+│  └──────────┘                                        │
+│       192.168.122.0/24  ── gestión y Ceph            │
+│       172.24.4.0/24     ── SDN/VMs (NAT→internet)    │
+└──────────────────────────────────────────────────────┘
 ```
 
-| Nodo      | IP             | Roles                        |
-|-----------|----------------|------------------------------|
+| Nodo      | IP             | Roles                         |
+|-----------|----------------|-------------------------------|
 | proxnode1 | 192.168.122.11 | Master inicial, MON, MGR, OSD |
 | proxnode2 | 192.168.122.12 | Worker, MON, MGR, OSD         |
 | proxnode3 | 192.168.122.13 | Worker, MON, MGR, OSD         |
@@ -39,53 +40,60 @@ Aprovisionado sobre KVM con Terraform y configurado con Ansible.
 ```
 lab-proxmox/
 ├── terraform/
-│   ├── main.tf            # VMs KVM (nested virtualization)
+│   ├── main.tf              # VMs KVM con virtualización anidada
 │   ├── variables.tf
 │   └── config/
-│       └── cloud_init.cfg # Red y usuarios iniciales
+│       └── cloud_init.cfg   # Red y usuarios iniciales de Proxmox
 └── ansible/
     ├── ansible.cfg
-    ├── inventory.yml      # Los 3 proxnodes
-    ├── deploy_lab.yml     # Stages 1-8: cluster+Ceph+SDN+routing
-    ├── create_alpine_vm.yml # VM Alpine Linux con cloud-init
-    ├── setup_ha.yml       # Alta Disponibilidad
-    ├── fix_routing.yml    # ip_forward + NAT + rutas SDN
-    └── locale_es.yml      # Locales opcionales
+    ├── inventory.yml        # Los 3 proxnodes
+    ├── deploy_lab.yml       # Stages 1-8: cluster+Ceph+SDN+routing+NAT
+    ├── create_alpine_vm.yml # VM Alpine Linux con cloud-init en Ceph
+    ├── setup_ha.yml         # Alta Disponibilidad
+    ├── fix_routing.yml      # ip_forward + NAT + rutas SDN (idempotente)
+    └── locale_es.yml        # Locales opcionales
 ```
 
-## Despliegue
+## Despliegue completo desde cero
 
 ```bash
-# 1. Aprovisionar VMs con Terraform
-cd terraform && terraform apply
+# 1. Aprovisionar VMs KVM con Terraform
+cd terraform
+terraform init
+terraform apply --auto-approve
 
-# 2. Desplegar clúster completo
+# 2. Limpiar fingerprints SSH
+./reset_ssh_finger.sh
+
+# 3. Desplegar clúster (Proxmox + Ceph + SDN + NAT)
 cd ansible
 ansible-playbook deploy_lab.yml
 
-# 3. Crear VM de prueba
+# 4. Crear VM Alpine de prueba
 ansible-playbook create_alpine_vm.yml
 
-# 4. Configurar HA
+# 5. Configurar Alta Disponibilidad
 ansible-playbook setup_ha.yml
 ```
 
 ## Prueba de Alta Disponibilidad
 
 ```bash
-# Terminal 1 — monitorear
-watch -n2 'ssh root@192.168.122.12 "ha-manager status"'
+# Terminal 1 — monitorear el clúster
+watch -n2 'ssh root@192.168.122.12 "ha-manager status" 2>/dev/null'
 
-# Terminal 2 — simular fallo
+# Terminal 2 — simular fallo del nodo master
 ssh root@192.168.122.11 "shutdown -h now"
 
-# Resultado esperado: VM migra a proxnode2 o proxnode3 en ~60s
+# Resultado esperado en ~60s:
+# service vm:9001 (proxnode2, started)  ← migró automáticamente
 ```
 
-## Acceso a las VMs
+## Acceso SSH a las VMs
 
-```bash
-# Configurar ~/.ssh/config (ejecutar una vez)
+Agrega esto a `~/.ssh/config`:
+
+```
 Host proxnode1
     HostName 192.168.122.11
     User root
@@ -98,7 +106,9 @@ Host 172.24.4.*
     ProxyJump proxnode1
     StrictHostKeyChecking no
     UserKnownHostsFile /dev/null
+```
 
-# Conectar a la VM Alpine
+```bash
+# Conectar directamente a la VM Alpine
 ssh root@172.24.4.10
 ```
