@@ -272,3 +272,47 @@
         mkdir -p /etc/iptables
         iptables-save > /etc/iptables/rules.v4
       changed_when: false
+
+
+# ==========================================
+# STAGE 9: VIRTUAL IP FLOTANTE (keepalived)
+# ==========================================
+- name: Instalar y configurar keepalived para VIP del cluster
+  hosts: all
+  vars:
+    vip: "192.168.122.100"
+    vip_interface: "vmbr0"       # la interfaz donde vive la red de gestión
+    vrrp_password: "proxha2024"  # contraseña compartida entre nodos
+  tasks:
+
+    - name: Instalar keepalived
+      apt:
+        name: keepalived
+        state: present
+        update_cache: false
+
+    - name: Configurar keepalived según rol del nodo
+      copy:
+        dest: /etc/keepalived/keepalived.conf
+        content: |
+          vrrp_instance PROXMOX_VIP {
+              state {{ 'MASTER' if inventory_hostname == 'proxnode1' else 'BACKUP' }}
+              interface vmbr0
+              virtual_router_id 51
+              priority {{ 150 if inventory_hostname == 'proxnode1' else
+                          (140 if inventory_hostname == 'proxnode2' else 130) }}
+              advert_int 1
+              authentication {
+                  auth_type PASS
+                  auth_pass proxha2024
+              }
+              virtual_ipaddress {
+                  192.168.122.100/24
+              }
+          }
+
+    - name: Habilitar y arrancar keepalived
+      systemd:
+        name: keepalived
+        enabled: true
+        state: restarted
