@@ -29,4 +29,5 @@ ansible.log
 .DS_Store
 Thumbs.db
 ansible/rootkey
+ansible/rootkey.pub
 ansible/.password
