@@ -27,5 +27,6 @@ ansible.log
 # OS & ENTORNOS
 # ========================
 .DS_Store
-Thumbs.dbansible/rootkey
+Thumbs.db
+ansible/rootkey
 ansible/.password
